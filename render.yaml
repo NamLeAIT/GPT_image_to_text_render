@@ -1,9 +1,14 @@
-
 services:
   - type: web
-    name: image-text-v3
+    name: image-text-v4
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install --upgrade pip setuptools wheel
+      pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
+    envVars:
+      - key: MAX_UPLOAD_MB
+        value: "15"
+      # - key: API_KEY
+      #   value: "your-secret"  # bật nếu muốn yêu cầu header x-api-key
