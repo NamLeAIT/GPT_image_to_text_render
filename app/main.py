@@ -10,6 +10,99 @@ import base64
 # Import internal library (placed alongside this app)
 from . import image_to_text_full_v3 as lib
 
+# ==== ADD THIS NEAR THE TOP ====
+from fastapi import Request
+import io
+
+# ==== ADD THESE NEW ENDPOINTS ====
+
+@app.post("/encode_octet", response_class=PlainTextResponse)
+async def encode_octet(
+    request: Request,
+    mode: str = "lossy-algo",          # query: lossless | lossy-algo | lossy-nlp
+    lock_dims: bool = False,
+    max_side: int = 512,
+    palette_size: int = 32,
+    resample: str = "bicubic",
+    dither: bool = False,
+    preserve_dims: bool = False,
+    target_short_side: int = 512,
+    palette_probe: int = 8,
+):
+    """
+    Accept raw image bytes in the request body (application/octet-stream).
+    This avoids multipart/form-data so it's friendly to various connectors.
+    """
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty body")
+
+    # Validate image
+    try:
+        from PIL import Image
+        Image.open(io.BytesIO(data)).load()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+
+    # Save temp PNG for the existing library (expects a path)
+    tmp_path = "/tmp/upload.png"
+    with open(tmp_path, "wb") as f:
+        f.write(data)
+
+    if mode == "lossless":
+        txt, _ = lib.encode_lossless_to_manifest(tmp_path)
+    elif mode == "lossy-algo":
+        txt, _ = lib.encode_lossy_algo_to_text(
+            tmp_path,
+            lock_dims=lock_dims,
+            max_side=max_side,
+            palette_size=palette_size,
+            resample=resample,
+            dither=dither,
+        )
+    elif mode == "lossy-nlp":
+        txt, _ = lib.encode_lossy_nlp_to_text(
+            tmp_path,
+            preserve_dims=preserve_dims,
+            target_short_side=target_short_side,
+            palette_probe=palette_probe,
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Unknown mode")
+
+    return PlainTextResponse(content=txt, headers={"Content-Disposition": 'attachment; filename="manifest_v3.txt"'})
+
+
+@app.post("/decode_text")
+async def decode_text(request: Request):
+    """
+    Accept plain text manifest in the request body (text/plain).
+    Returns image/png.
+    """
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty body")
+
+    # Try UTF-8
+    try:
+        txt = body.decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be UTF-8 text")
+
+    # Sniff schema (reuse your helper)
+    mode = _sniff_text_mode(txt)
+    if mode == "lossless":
+        out_path, _ = lib.decode_lossless_manifest_to_image(txt, output_dir="/tmp")
+    elif mode == "lossy-algo":
+        out_path, _ = lib.decode_lossy_algo_text_to_image(txt, output_dir="/tmp")
+    elif mode == "lossy-nlp":
+        out_path, _ = lib.decode_lossy_nlp_text_to_proxy_image(txt, output_dir="/tmp")
+    else:
+        raise HTTPException(status_code=400, detail="Unknown mode")
+
+    img_bytes = open(out_path, "rb").read()
+    return Response(content=img_bytes, media_type="image/png", headers={"Content-Disposition": 'inline; filename="decoded.png"'})
+
 app = FastAPI(title="Image<->Text Encoder (v3)", version="1.0.0", docs_url="/docs", redoc_url="/redoc")
 
 # CORS (allow all by default; tighten in production if needed)
